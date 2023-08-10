@@ -26,6 +26,7 @@ use Monolog\Handler\StreamHandler;
 use Illuminate\Support\Facades\Log;
 use Monolog\Handler\FirePHPHandler;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 /**
  * Class BookingRepository
@@ -57,10 +58,14 @@ class BookingRepository extends BaseRepository
      */
     public function getUsersJobs($user_id)
     {
-        $cuser = User::find($user_id);
         $usertype = '';
         $emergencyJobs = array();
         $noramlJobs = array();
+        $cuser = User::find($user_id);
+
+        //do not have to iterate all the conditions if the data set will be empty in case the user is not found!
+        if (!$cuser){ return ['emergencyJobs' => $emergencyJobs, 'noramlJobs' => $noramlJobs, 'cuser' => $cuser, 'usertype' => $usertype]; }
+
         if ($cuser && $cuser->is('customer')) {
             $jobs = $cuser->jobs()->with('user.userMeta', 'user.average', 'translatorJobRel.user.average', 'language', 'feedback')->whereIn('status', ['pending', 'assigned', 'started'])->orderBy('due', 'asc')->get();
             $usertype = 'customer';
@@ -92,15 +97,20 @@ class BookingRepository extends BaseRepository
     public function getUsersJobsHistory($user_id, Request $request)
     {
         $page = $request->get('page');
-        if (isset($page)) {
-            $pagenum = $page;
-        } else {
-            $pagenum = "1";
-        }
+        $pagenum = isset($page) ? $page : "1"; // using tertiary operators makes the code more readable
+//        if (isset($page)) {
+//            $pagenum = $page;
+//        } else {
+//            $pagenum = "1";
+//        }
         $cuser = User::find($user_id);
         $usertype = '';
         $emergencyJobs = array();
         $noramlJobs = array();
+        //do not have to iterate all the conditions if the data set will be empty in case the user is not found!
+        if (!$cuser){ return ['emergencyJobs' => $emergencyJobs, 'noramlJobs' => [], 'jobs' => null, 'cuser' => $cuser, 'usertype' => $usertype, 'numpages' => 0, 'pagenum' => 0];}
+
+        //conditional statement below does not have any else condition which leaves the cases 1)no user found & 2)userType other than translator and customer, unhandled.
         if ($cuser && $cuser->is('customer')) {
             $jobs = $cuser->jobs()->with('user.userMeta', 'user.average', 'translatorJobRel.user.average', 'language', 'feedback', 'distance')->whereIn('status', ['completed', 'withdrawbefore24', 'withdrawafter24', 'timedout'])->orderBy('due', 'desc')->paginate(15);
             $usertype = 'customer';
@@ -117,6 +127,8 @@ class BookingRepository extends BaseRepository
 //            $jobs['data'] = $noramlJobs;
 //            $jobs['total'] = $totaljobs;
             return ['emergencyJobs' => $emergencyJobs, 'noramlJobs' => $noramlJobs, 'jobs' => $jobs, 'cuser' => $cuser, 'usertype' => $usertype, 'numpages' => $numpages, 'pagenum' => $pagenum];
+        }else{// should always have an else case what if the user is of some other type than translator or customer
+            return ['emergencyJobs' => $emergencyJobs, 'noramlJobs' => [], 'jobs' => null, 'cuser' => $cuser, 'usertype' => $usertype, 'numpages' => 0, 'pagenum' => 0];
         }
     }
 
@@ -2104,10 +2116,19 @@ class BookingRepository extends BaseRepository
 
     public function ignoreThrottle($id)
     {
-        $throttle = Throttles::find($id);
-        $throttle->ignore = 1;
-        $throttle->save();
-        return ['success', 'Changes saved'];
+        try {
+            $throttle = Throttles::findOrFail($id);
+            $throttle->ignore = true;
+            $throttle->save();
+
+            return ['status' => 'success', 'message' => 'Throttle record successfully ignored'];
+        } catch (ModelNotFoundException $e) {
+            return ['status' => 'error', 'message' => 'Throttle record not found'];
+        } catch (\Exception $e) {
+            // Log the error and return an appropriate response
+            \Log::error('Error ignoring throttle: ' . $e->getMessage());
+            return ['status' => 'error', 'message' => 'An error occurred while ignoring throttle'];
+        }
     }
 
     public function reopen($request)
